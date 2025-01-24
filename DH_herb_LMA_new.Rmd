@@ -1,0 +1,1410 @@
+---
+title: "DH_herb_LMA"
+author: "Claudia Richbourg w/ special guest star William C. Rosenthal"
+date: "started Nov 2022, working SEPT 2023"
+output:
+    html_document:
+      df_print: paged
+      code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(lmerTest)
+library(lme4)
+library(plotly)
+library(vegan)
+library(tidyr)
+knitr::opts_knit$set(root.dir = "~/Documents/DH_herb_analysis")
+```
+
+## 1. Loading in Data
+
+Loaded in my percent area damaged data. Added in my LMA data. And LVD. 
+
+```{r}
+getwd()
+fulldhdata <- read.table(file="DH_damage.tsv", sep="\t",header=T) #read in data
+View(fulldhdata) #checking it out
+data<- fulldhdata[-which(fulldhdata$Plant.ID %in% c("UNID","seed")),] #remove UNID and seed
+data$perc_area_dam<- ((rowSums(data[,5:12],na.rm = T))/data$area_leaf)*100 #making the percent of area damaged by insect
+data$perc_fung_dam<- (data$fungal_dam/data$area_leaf)/100 #making percent area damaged by FUNGUS, "fung"
+hist(data$perc_area_dam) #looking at our data in a histogram ( I know this is functionally meaningless as most leaves wil have between 0-1% damage so IDC, just want to see it)
+data$Plant.ID[which.max(data$perc_area_dam)] #checking who has the most area damaged 
+
+#rename wyomingensis to rannii
+data$Plant.ID <- gsub("Macginitiea wyomingensis","Macginitiea rannii",data$Plant.ID)
+data$Plant.ID <- gsub("Apeiba improvia","Apeiba improvisa",data$Plant.ID)#fix spelling error
+#LMA data!
+#making a dataframe for that data
+#November note: this differs here from the original code as morphotype 22 is now part of morphotype 7
+lma<- data.frame(Plant.ID= c("Macginitiea rannii", "Macginitiea gracilis", "Apeiba improvisa", "Platanites raynoldsii", "Dicot sp.WR007", "Dicot sp.WR028", "Populus cinnamomoides", "Dicot sp.WR034", "Symplocos incondita"),
+                 LMA= c(66.25,69.57,71.49,58.68,94.16,77.44,76.04,143.75,119.37))#hard coding in my LMA values b/c dropbox was not loading, Nov updated 
+data$LMA <- lma$LMA[match(data$Plant.ID,lma$Plant.ID)] #uses the match function to put this value in everytime there's that morphotype there
+
+#read in LVD data
+LVD_complete<- read.csv("LVD_complete.csv", colClasses="character")
+View(LVD_complete)
+#need to drop the fist column in here
+LVD_complete<- subset(LVD_complete, select = -c(1))
+class(LVD_complete)
+
+#now wanna add in a column for LVD into "data" 
+#lets do it how we already done 
+data$LVD <- LVD_complete$LVD[match(data$Specimen.number,LVD_complete$Specimen.number)]
+
+#get rid of the NA's for when I go to do my models to avoid survivorship bias
+data<- data %>% replace(is.na(.), 0)
+data$LVD <- as.numeric(data$LVD)
+#Nov note- this is looking good!
+#now data is updated SEPTEMBER 2023
+#save the data
+write.table(data, file="DH_herb_traits_mega_object.tsv", sep="\t")
+#remove the rows that have 0s in them for LVD and make a new object 
+data_no_LVD_zeroes<- data[!(data$LVD==0),]
+#data_no_LVD_zeroes is for only the specimens with LVD measured!
+sum(data$area_leaf >0)#use sum instead of length b/c true and false can be represented numerically 0F, 1T so use SUM
+
+##############
+#working with mallory 
+#getting rid of every leaf whos area is 0 for the purpose of running our models, where an area of 0 is not biologically meaningful 
+data_no_LVD_zeroes[data_no_LVD_zeroes$area_leaf>0,]
+data_no_area_LVD_zeroes<- data_no_LVD_zeroes[data_no_LVD_zeroes$area_leaf>0,]
+View(data_no_area_LVD_zeroes)
+
+data_no_PAD_zeroes<- data[!(data$perc_area_dam==0),]
+data_no_PAD_zeroes <- data_no_PAD_zeroes[!is.na(data_no_PAD_zeroes$Specimen.number),]
+#LMA full data
+DH_LMA_R <- read_csv("DH_LMA_R.csv")
+DH_LMA_R$Plant.ID <- gsub("Macginitea wyomingensis","Macginitiea rannii",DH_LMA_R$Plant.ID)
+DH_LMA_R$Plant.ID <- gsub("Macginitea gracilis","Macginitiea gracilis",DH_LMA_R$Plant.ID)
+DH_LMA_R$Plant.ID <- gsub("Apeiba improvia","Apeiba improvisa",DH_LMA_R$Plant.ID)#fix spelling error
+View(DH_LMA_R)
+
+```
+
+## 1.2 New code chunk to show ellen whats up with my data
+```{r}
+#how many leaves in total dataset  (this includes DH and DH recollections we did)
+nrow(data)
+nrow(data2)
+#how many morphotypes
+length(unique(data$Plant.ID))
+#what morphotypes 
+unique(data$Plant.ID)
+#how many leaves in each morphotype
+aggregate(data=data, Specimen.number~Plant.ID, function(x) length(unique(x)))
+aggregate(data=data2, Specimen.number~Plant.ID, function(x) length(unique(x)))
+#number of LVD leaves
+length(unique(data_no_LVD_zeroes$Specimen.number))
+#number of LVD leaves per morphotype
+aggregate(data=data_no_LVD_zeroes, Specimen.number~Plant.ID, function(x) length(unique(x)))
+#number of PAD leaves 
+nrow(data[data$perc_area_dam>0,])
+#number of PAD leaves per morphotype
+aggregate(data=data,perc_area_dam~ Plant.ID, function(x) length(unique(x)))
+#number of fungal leaves 
+nrow(data[data$perc_fung_dam>0,])
+#number of fungal leaves per morphotype
+aggregate(data=data,perc_fung_dam~ Plant.ID, function(x) length(unique(x)))
+#number of measurements that went into LMA is 74, only 9 morphotypes when excluding singletons and doubletons
+
+
+#look at summary
+install.packages("gtExtras")
+install.packages("svglite")
+library(gtExtras)
+library(svglite)
+library(EnvStats)
+library(ggplot2)
+# species means for LVD and LMA, cutoff for n>20 
+specmeanlvdtbl<-data_no_area_LVD_zeroes%>% group_by(Plant.ID) %>% summarise(mean_lvd=mean(LVD))
+specmeanlvdtbl
+ggplot(data = specmeanlvdtbl, aes(x = Plant.ID , y = mean_lvd )) +
+  geom_point()
+#for species with n>20 in the datset but who had more than 2 representatives in their LMA, need to prune the morphotypes (1,21) from the lma object
+lma<- lma %>%  filter(!row_number() %in% c(1, 8))
+ggplot(data = lma, aes(x = Plant.ID , y = LMA)) +
+  geom_point()
+
+
+library("patchwork")
+#now making boxplots to look at the PAD, LVD, LMA by morphotype
+#figure in paper
+LVD_boxp<-ggplot(data=data_no_LVD_zeroes, aes(x=Plant.ID, y=LVD, fill=Plant.ID)) +
+  labs(x="Morphotype", y="LVD mm/mm^2", tag = "A") +labs(fill='Species')+
+  geom_boxplot(alpha=0.95) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=5), legend.title=element_blank(), legend.position = "none")+
+scale_fill_manual(values = c("Macginitiea rannii" = "#e6194B", "Macginitiea gracilis" = "#3cb44b","Apeiba improvisa"="#ffe119",
+                             "Dombeya novi-mundi"= "#4363d8", "Platanites raynoldsii"= "#f58231", "Symplocos incondita"= "#911eb4",
+                             "Dicot sp.WR007"= "#42d4f4", "Rhus sp."= "#f032e6", "Dicot sp.WR027"= "#bfef45", "Dicot sp.WR028"= "#fabed4",
+                             "Dicot sp.WR029"= "#469990", "Dicot sp.WR030"= "#dcbeff", "Dicot sp.WR031"= "#9A6324", 
+                             "Populus cinnamomoides"="#fffac8", "Dicot sp.WR032"= "#800000", "Dicot sp.WR033"= "#aaffc3",
+                             "Dicot sp.WR034"= "#808000", "Juglandaceae sp.WR035"= "#ffd8b1"))
+ 
+
+PAD_boxp<-ggplot(data=data_no_PAD_zeroes, aes(x=Plant.ID, y=perc_area_dam, fill=Plant.ID)) +
+  labs(x="Morphotype", y="Percent Area Damaged", tag = "B") +labs(fill='Species')+
+  geom_boxplot(alpha=0.95) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=5))+
+scale_fill_manual(values = c("Macginitiea rannii" = "#e6194B", "Macginitiea gracilis" = "#3cb44b","Apeiba improvisa"="#ffe119",
+                             "Dombeya novi-mundi"= "#4363d8", "Platanites raynoldsii"= "#f58231", "Symplocos incondita"= "#911eb4",
+                             "Dicot sp.WR007"= "#42d4f4", "Rhus sp."= "#f032e6", "Dicot sp.WR027"= "#bfef45", "Dicot sp.WR028"= "#fabed4",
+                             "Dicot sp.WR029"= "#469990", "Dicot sp.WR030"= "#dcbeff", "Dicot sp.WR031"= "#9A6324", 
+                             "Populus cinnamomoides"="#fffac8", "Dicot sp.WR032"= "#800000", "Dicot sp.WR033"= "#aaffc3",
+                             "Dicot sp.WR034"= "#808000", "Juglandaceae sp.WR035"= "#ffd8b1"))+ theme(legend.position = "none") 
+
+
+LMA_boxp<-ggplot(data=DH_LMA_R, aes(x=Plant.ID, y=LMA, fill=Plant.ID))+
+  labs(x="Morphotype", y="LMA g/m^2", tag = "C", fill="Species")+
+  geom_boxplot(alpha=0.95) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=5))+
+scale_fill_manual(values = c("Macginitiea rannii" = "#e6194B", "Macginitiea gracilis" = "#3cb44b","Apeiba improvisa"="#ffe119",
+                             "Dombeya novi-mundi"= "#4363d8", "Platanites raynoldsii"= "#f58231", "Symplocos incondita"= "#911eb4",
+                             "Dicot sp.WR007"= "#42d4f4", "Rhus sp."= "#f032e6", "Dicot sp.WR027"= "#bfef45", "Dicot sp.WR028"= "#fabed4",
+                             "Dicot sp.WR029"= "#469990", "Dicot sp.WR030"= "#dcbeff", "Dicot sp.WR031"= "#9A6324", 
+                             "Populus cinnamomoides"="#fffac8", "Dicot sp.WR032"= "#800000", "Dicot sp.WR033"= "#aaffc3",
+                             "Dicot sp.WR034"= "#808000", "Juglandaceae sp.WR035"= "#ffd8b1")) 
++ theme(legend.position = "none")
+
+legend1 <- cowplot::get_legend(PAD_boxp + theme(legend.position = "bottom") +
+                                 guides(fill=guide_legend(nrow=4)))
+
+LVD_PAD_LMA_plotv1<-ggarrange(
+  ggarrange(LVD_boxp+ rremove("x.text"), PAD_boxp+ rremove("x.text"), LMA_boxp + rremove("x.text"),
+            ncol=3, common.legend = F), NULL, legend1, nrow = 3, 
+          common.legend = F, heights = c(1,-0.3,1)
+)
+png("LVD_PAD_LMA_plotv1.png", height=5.5, width=8, units="in", res=600) #this fits in line with my page!
+LVD_PAD_LMA_plotv1     # Plot 1 --> in the first page 
+dev.off()
+
+
+# I got to here running things again in Feb 16 2024 AM time with the updated names for things
+#now time for the megaboxplot like blonder's paper
+#need to match the specimens for which have a LVD measurement 
+#make a new dataset with indivduals with both a LVD and a LMA in them, then plot
+#DH_LMA_R$LVD<-data_no_LVD_zeroes$LVD[match(data_no_LVD_zeroes$Specimen.number,DH_LMA_R$Specimen)]
+#DH_LMA_R$LVD<-merge(data_no_LVD_zeroes,DH_LMA_R, by  = "Specimen.number") 
+class(data_no_area_LVD_zeroes$Specimen.number)
+DH_LMA_R$Specimen.number<-as.character(DH_LMA_R$Specimen.number)
+LMA_LVD_Mega<-dplyr::inner_join(data_no_LVD_zeroes, DH_LMA_R, by="Specimen.number")
+LMA_LVD_Mega$LMA<- LMA_LVD_Mega$LMA.y
+#there's only 5 individuals that have both LMA and LVDs but here it is anyways
+install.packages("ggExtra")
+library(ggExtra)
+# make a usual ggplot and store it
+# point size increased, legend to the bottom
+p1 <- ggplot(LMA_LVD_Mega, aes(x=LMA, y=LVD , color=Plant.ID.x)) +
+  geom_point(size=3) +
+  theme(legend.position="bottom")
+
+# marginal boxplot
+# relative size of the central plot increased
+ggMarginal(p1, type="boxplot", size=7)
+#from ians 2006 paper for the better error calculation
+nspec <- 18
+prop_untoothed <- 0.50
+MeanAnnTemp3Ssqse<- (1+(0.052*(nspec-1)*prop_untoothed*(1-prop_untoothed)))*((prop_untoothed*(1-prop_untoothed))/nspec)
+MeanAnnTemp3se <- sqrt(MeanAnnTemp3Ssqse)
+MeanAnnTemp3sd <- sqrt(MeanAnnTemp3Ssqse) * sqrt(nspec)
+upper_MAT <- 1.141 + (0.306 * ((prop_untoothed*100) + (2*MeanAnnTemp3sd*100) ))
+lower_MAT <- 1.141 + (0.306 * ((prop_untoothed*100) - (2*MeanAnnTemp3sd*100) ))
+upper_MAT - lower_MAT
+
+
+MeanAnnTemp3SDb<- MeanAnnTemp3SDnsqrtanddiv/ .025
+#MeanAnnTemp1<- 0.204*50+4.6 #similar to charlotte SC or Rome Italy, +- 4C according to Royer 2012
+MeanAnnTemp2<- 30.6*prop_untoothed+1.14 #this is from Wing and Greenwood 1993 
+MeanAnnTemp2top<- 30.6*(prop_untoothed+MeanAnnTemp3se)+1.14
+MeanAnnTemp2bot<-30.6*(prop_untoothed-MeanAnnTemp3se)+1.14
+#ALSO USE KOWLASKI AND DILCHER AS THEY USED WET THINGS
+MeanAnnTemp3<- .363*50+2.23 #this is kowalski and dilcher
+
+
+#MlnA<- sum()
+#MAPcalc<- 0.0548*MlnA+0.768
+
+cor.test(LMA_LVD_Mega$LMA, LMA_LVD_Mega$LVD, method=c("pearson"))
+
+```
+## Doing some more reading in here at this point
+
+```{r}
+#load in just fungal damage
+fungdata<-read.csv("./DH_herb_analysis/DH_fungusonly_LMAtaxa.csv")
+fungdata$fungal_dam_area<-fungdata$fungal_dam.1
+fungdata<- subset(fungdata, select= -c(5:12))
+#lets read in the undamaged data
+DH_Undamaged_MPC <- read_csv("./DH_Undamaged_MPC.csv")#hola data
+undam <- subset(DH_Undamaged_MPC, select = -c(4:8)) #adds in these strange columns ? begone!
+colnames(undam)[1] <- "Specimen.number"
+colnames(undam)[2] <- "Plant.ID"
+data$Specimen.number <- as.character(data$Specimen.number)#my addition of the undamaged data onto the damaged data didn't work unless I made the speicmen numbers characters, when they had been integers in the "data" damaged set, but characters in the "undam" undamaged dataset
+#update names for undamaged
+name_key <- read.csv("./DH_herb_analysis/Lump_key.csv")
+undam$Plant.ID <- name_key$taxon[match(undam$Plant.ID,name_key$old)]
+
+fungdata$Specimen.number <- as.character(fungdata$Specimen.number)
+fungdata$fungal_dam<- as.numeric(fungdata$fungal_dam)
+#update names for fungdata
+fungdata$Plant.ID <- name_key$taxon[match(fungdata$Plant.ID,name_key$old)]
+
+data2<-dplyr::bind_rows(data, undam, fungdata)#made a new object called "data2" that has my undamaged data attached onto the end of this 
+data2<-data2 %>% replace(is.na(.), 0) #banish the NAs
+data2$LMA <- lma$LMA[match(data2$Plant.ID,lma$Plant.ID)]
+hist(data2$perc_area_dam)
+data2$Plant.ID <- gsub("Macginitiea wyomingensis","Macginitiea rannii",data2$Plant.ID)
+
+```
+"data" is just my damaged leaves. "data2" is all leaves in the selected morphotypes (undamaged, insect damaged, and fungals only). 
+
+
+
+## 2. Basic Plots and Models 
+
+Here's my first pass with the most basic plots and models:
+
+```{r}
+#make a nice plot with percent area damaged by LMA! 
+#Nov note- not sure if I choudl drop the 0s or not, so here's me trying that out just to see what happens...?
+#take the dataset here called data, and remove all undmaageds and call it df_dam
+class(data)
+df_nonzero<-subset(data, perc_area_dam!=0 & LMA!=0 & perc_fung_dam!=0)
+View(df_nonzero)
+#NOV note- this worked!
+ggplot(data=df_nonzero, mapping=aes(y=perc_area_dam,x=LMA))+
+         geom_point(aes(color=Plant.ID)) +#cool very very simple ggplot just to have a peek 
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+#NOV note- this is the dataset without 0s for LMA/perc area dam/perc fung dam included 
+#everything that follows is the dataset without 0s included, and the one underneath this chunk is with them 0s
+ggplot(data=df_nonzero, mapping=aes(y=perc_fung_dam,x=LMA))+
+         geom_point(aes(color=Plant.ID)) +#cool very very simple ggplot just to have a peek 
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged by fungus")
+ggplot(data=df_nonzero, mapping=aes(y=perc_area_dam,x=perc_fung_dam))+#NOV note; realizing this is not actually that good of an idea as there is gonna be a lot of 1-1 plotting from the only damage being from fungus
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+
+ggplot(data=data, mapping=aes(y=perc_area_dam,x=LMA))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+
+ggplot(data=data, mapping=aes(y=perc_fung_dam,x=LMA))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged by fungus")
+
+ggplot(data=df_nonzero, mapping=aes(y=perc_area_dam,x=perc_fung_dam))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+
+#now o look at LVD stuff
+#have to use data=LVD_no_zeroes for nayting with LVD 
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=perc_area_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=perc_fung_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged by fungus")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=hole_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent hole damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=margin_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent margin damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=skele_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent skele damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=surf_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent surface damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=ps_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent ps damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=ovi_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent ovi damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=mine_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent mine damaged")
+
+ggplot(data=data_no_LVD_zeroes, mapping=aes(y=gall_dam,x=LVD))+
+         geom_point(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent gall damaged")
+
+ggplot(data=data, mapping=aes(y=perc_area_dam,x=Plant.ID))+
+         geom_boxplot(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent area damaged")
+
+ggplot(data=data, mapping=aes(y=scale(perc_fung_dam),x=Plant.ID))+
+         geom_boxplot(aes(color=Plant.ID)) +
+  stat_smooth(method = "lm",formula = y~x)+
+  ylab("Percent fung area damaged")
+
+#################
+#rank abundance curve here
+#################
+
+install.packages("BiodiversityR")
+library(vegan)
+library(BiodiversityR)
+#if im doing rank abundance, i need to have "Community data frame with sites as rows, species as columns and species abundance as cell values. " and that is my x (first thing in the function)
+#so, lets do that 
+rank_data_feed<-aggregate(data=data, Specimen.number~Plant.ID, function(x) length(unique(x)))
+#so now i need to transpose that 
+install.packages("janitor")
+library(janitor)
+rank_data_feedt<-t(rank_data_feed)
+rank_data_feedt<- janitor::row_to_names(rank_data_feedt, row_number = 1)
+class(rank_data_feedt)<- "numeric"
+
+
+RankAbun.1 <- rankabundance(rank_data_feedt)
+rankabunplot<-rankabunplot(RankAbun.1, scale='abundance', addit=FALSE, specnames=c(1,2,3))
+
+
+
+??rankabundplot
+#######
+#lets do pielou's j and shannons h with vegan
+#######
+library(vegan)
+shannonH<-diversity(rank_data_feedt)
+pieJ_specnum<-specnumber(rank_data_feedt)
+pieJ <- shannonH/log(pieJ_specnum)
+
+citation("vegan")
+
+```
+
+## Bad Linear Models Lurk Here
+```{r}
+# doing linear models for the data..
+#lets start modelling!
+m1<- lm(perc_area_dam~LMA, data=data, na.action = na.omit)#making our first model, response is perc_area_dam and predicotr is LMA
+summary(m1)# residual standard error is the variance of the residuals- pvalue is not very hot at all 
+plot(perc_area_dam~LMA, data=data)
+abline(m1)#plotted over the data. zoinks this doesnt look good
+
+m2<- lm(perc_area_dam~perc_fung_dam, data=data, na.action = na.omit)#response is area dam and predictor is fungal ?
+summary(m2)#also pretty bad model
+plot(perc_area_dam~perc_fung_dam, data=data)
+abline(m2)
+
+m3<- lm(perc_fung_dam~LMA, data=data, na.action = na.omit)
+summary(m3)#terrible model 
+plot(perc_fung_dam~LMA, data=data)
+abline(m3)
+
+m4<- glm(perc_area_dam~LMA + perc_fung_dam, data=data)#wanted to see if a mlmn with perc_fung_dam as a random effect would be any use here
+summary(m4)#not great
+plot(perc_area_dam~LMA, data=data)
+abline(m4)
+
+m5<- lm(perc_area_dam~Plant.ID, data=data) #THIS IS NOT THE RIGHT APPROACH since data are categorical and continuous
+#try out a welch two sample t test
+
+aov.damvplant<- aov(perc_area_dam~Plant.ID, data=data)
+summary(aov.damvplant)#pvalue is .0145!!
+#lets do the tukey to see what groups there are in the plant id
+TukeyHSD(aov.damvplant)
+
+
+#NEW MODELS BBY SEPT23
+m6<- lm(scale(perc_area_dam)~scale(LVD), data=data_no_LVD_zeroes)
+summary(m6)
+
+m7<-lm(scale(perc_fung_dam)~scale(LVD), data=data_no_LVD_zeroes)
+summary(m7)
+{plot(perc_fung_dam ~ LVD, data=data_no_LVD_zeroes)
+abline(m7)}
+
+m8<-lm(scale(skele_dam)~scale(LVD), data=data_no_LVD_zeroes)
+summary(m8)
+plot(skele_dam~LVD, data=data_no_LVD_zeroes)
+
+m9<-lm(scale(hole_dam)~scale(LVD), data=data_no_LVD_zeroes)
+summary(m9)
+{plot(hole_dam~LVD, data=data_no_LVD_zeroes)
+  abline(m9)}
+
+m10<-lm(scale(margin_dam)~scale(LVD), data=data_no_LVD_zeroes)
+summary(m10)
+plot(margin_dam~LVD, data=data_no_LVD_zeroes)
+
+
+#singularities in models from lack of robustness in dataset. n is extremely low (mostly 2-4 leaves). will be fiddling around with this for the paper but leaving it for now for the talk analyses
+
+```
+
+## 2.5. BETA REGRESSION IN R COURTESY OF SPECIAL GUEST STAR MALLORY LAI 
+
+```{r}
+#need to install the package for beta regression
+#we are doing beta regression because my data are not nornmal, linear, parametric, heteskedastic, zero inflated
+#there are proportion data (leaf area) and am following the wisdom set forth by the JAMES WEEDON & BOB DOUMA thru beta regression 
+#okay so now lets get the package(s) we need!
+install.packages("betareg")
+library(betareg)
+
+#betareg(perc_fung_dam~LMA+LVD+perc_area_dam, data=data_no_area_LVD_zeroes)------BAD IDEA as I am 0 inflated
+#summary(data_no_area_LVD_zeroes$perc_fung_dam)
+#Im 0 inflated so I need to use ZOIB
+
+install.packages("gamlss")
+library(gamlss)
+install.packages("emmeans")
+library(emmeans)
+
+gamlssmodel1 <- gamlss(perc_fung_dam~LMA+LVD+perc_area_dam +random(as.factor(Plant.ID)),  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel1)
+
+gamlssmodel2 <- gamlss(perc_fung_dam~LMA+random(as.factor(Plant.ID)),  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel2)
+
+gamlssmodel3 <- gamlss(perc_fung_dam~LVD+random(as.factor(Plant.ID)),  family = BEZI, data=data_no_area_LVD_zeroes, trace = F, control = gamlss.control(n.cyc = 200))
+summary(gamlssmodel3)
+
+gamlssmodel4 <- gamlss((perc_area_dam/100)~LVD+random(as.factor(Plant.ID)),  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel4)
+
+gamlssmodel5 <- gamlss((perc_area_dam/100)~LMA+random(as.factor(Plant.ID)),  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel5)
+
+gamlssmodel6 <- gamlss((perc_area_dam/100)~Plant.ID,  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel6)
+em_m6<-emmeans(gamlssmodel6, "Plant.ID", type = "pairwise")
+contrast(em_m6, method="pairwise")
+
+install.packages("AICcmodavg")
+library(AICcmodavg)
+install.packages("MASS")
+library(MASS)
+
+allgamlssmodels<- list(gamlssmodel1, gamlssmodel2, gamlssmodel3, gamlssmodel4, gamlssmodel5, gamlssmodel6)
+allgamlssmodels.names<- c("all_var", "fungvslma", "fungvslvd", "percvslvd", "percvslma", "percvsplantid" )
+allgamlssmodels_glm <- lapply(allgamlssmodels, glm.convert)
+aictab(cand.set = allgamlssmodels_glm, modnames = allgamlssmodels.names, second.ord = TRUE)
+#aictab(cand.set = allgamlssmodels, modnames = allgamlssmodels.names)
+
+gamlssmodel7<-gamlss(perc_fung_dam~Plant.ID,  family = BEZI, data=data_no_area_LVD_zeroes, trace = F)
+summary(gamlssmodel7)
+
+
+```
+
+
+
+## 3. Total Area of Damaged Tissue 
+
+Done.
+```{r}
+#so i need to find the total area of damaged leaf tissue which should be pretty dang low (1%ish)
+totalpercareadamall<-(sum(data[,5:13])/sum(data$area_leaf))*100 #divided area of leaves damaged by the total sum of insect specific damage, so we get this for all of our LMA having taxa
+cat("The total area of damaged leaf tissue is",totalpercareadamall,"%")#print out how much area is damaged
+```
+
+
+## 4. Reading in my torstens code outputs
+
+```{r}
+#data2<-dplyr::bind_rows(data, undam)#made a new object called "data2" that has my undamaged data attached onto the end of this 
+#data2<-data2 %>% replace(is.na(.), 0) #banish the NAs
+#using both data sets
+#perctotdam<- (nrow(data)/length(data2$Specimen.number))*100
+#cat("The percent of leaves with any insect damage is", perctotdam, "%")
+setwd("~/Documents/DH_herb_analysis")
+DH_summary <- read.csv("DH _summary.csv")# this is my torstens code summary file 
+colnames(DH_summary) <- gsub("X.","%",colnames(DH_summary))
+#additionally, this has all my damage info per each morphotype so I can report this as well
+```
+
+## 5. Damage Frequency (% of leaves with damage)
+
+Want total damage frequency for bulk and each taxon, specialized damage for bulk and each taxon, and each FFG bulk and each taxon.  
+```{r}
+#total damage frequency for bulk 
+#totaldambulk<-DH_summary$`%Insect`[nrow(DH_summary)]
+#totaldambulk<-as.numeric(totaldambulk)*100
+#cat("The percent of leaves with damage is", totaldambulk,"%",fill=T)
+
+#total damage frequency for each taxon
+#for (i in 1:(nrow(DH_summary)-1)) {
+ # cat(paste0(DH_summary[i,1],", ",DH_summary[i,4]),fill=T)
+#}
+
+#should use data 2 here
+taxa <- unique(data2$Plant.ID)
+freq_damage <- c()
+undam_types<- c("0", "", "F", "FFB", "F, FFB", "FFB, F", "F,FFB","FB")
+for (t in taxa){
+  temp_taxa <- data2[which(data2$Plant.ID == t),]
+  temp_taxa <- temp_taxa[,3] 
+  dam_prop<- sum(temp_taxa %in% undam_types == FALSE)/length(temp_taxa)
+  freq_damage<- c(freq_damage, dam_prop)
+}
+freq_dam_df<- data.frame(taxa, freq_damage )
+
+
+```
+
+
+```{r}
+#specialized damage for bulk
+percspecdam<-DH_summary$`%Spec`[nrow(DH_summary)]
+percspecdam<- as.numeric(percspecdam)*100
+cat("The percent of leaves with specialized damage is", percspecdam, "%",fill=T)
+
+#specialized damage for each taxon
+for (i in 1:(nrow(DH_summary)-1)) {
+  cat(paste0(DH_summary[i,1],", ",DH_summary[i,5]),fill=T)
+}
+
+#each ffg for bulk
+percbulkgall<-DH_summary$`%Gall`[nrow(DH_summary)]
+percbulkgall<- as.numeric(percbulkgall)*100
+cat("The percent of leaves with gall damage is", percbulkgall, "%",fill=T)
+percbulkmine<-DH_summary$`%Mine`[nrow(DH_summary)]
+percbulkmine<- as.numeric(percbulkmine)*100
+cat("The percent of leaves with mine damage is", percbulkmine, "%",fill=T)
+percbulkfung<-DH_summary$`%Fungal`[nrow(DH_summary)]
+percbulkfung<- as.numeric(percbulkfung)*100
+cat("The percent of leaves with fungal damage is", percbulkfung, "%",fill=T)
+#percbulkskele<-DH_summary[26,9]
+#percbulkskele<- as.numeric(percbulkskele)*100
+#cat("The percent of leaves with skeletonizing damage is", percbulkskele, "%",fill=T)
+#percbulkpands<-DH_summary[26,10]
+#percbulkpands<- as.numeric(percbulkpands)*100
+#cat("The percent of leaves with piercing and sucking damage is", percbulkpands, "%",fill=T)
+#percbulkmarg<-DH_summary[26,11]
+#percbulkmarg<- as.numeric(percbulkmarg)*100
+#cat("The percent of leaves with margin damage is", percbulkmarg, "%",fill=T)
+#percbulkhole<-DH_summary[26,12]
+#percbulkhole<- as.numeric(percbulkhole)*100
+#cat("The percent of leaves with hole damage is", percbulkhole, "%",fill=T)
+#percbulksurf<-DH_summary[26,13]
+#percbulksurf<- as.numeric(percbulksurf)*100
+#cat("The percent of leaves with surface damage is", percbulksurf, "%",fill=T)
+#percbulkovi<-DH_summary[26,14]
+#percbulkovi<- as.numeric(percbulkovi)*100
+#cat("The percent of leaves with ovipositional damage is", percbulkovi, "%",fill=T)
+
+```
+
+## 6. Damage type diversity
+
+Want total damage type count for bulk and each taxon, specialized damage type count for bulk and each taxon, mining type count for bulk and each taxon, and galling for bulk and each taxon. 
+```{r}
+#total damage type diversity for the bulk flora
+dtcount<- DH_summary$DTs[nrow(DH_summary)]-2
+cat("The total damage type count is", dtcount)
+
+#damage type diversity for each taxon 
+for (i in 1:(nrow(DH_summary)-1)) {
+  cat(paste0(DH_summary[i,1],", ",(DH_summary[i,9]-2)),fill=T)
+}
+
+#specialized damage type count for bulk
+specdtcount<-as.numeric(DH_summary[19,10])
+cat("The total specialized damage type count is", specdtcount,fill=T)
+
+#specialized damage type count for each taxon
+for (i in 1:(nrow(DH_summary)-1)) {
+  cat(paste0(DH_summary[i,1],", ",(DH_summary[i,10])),fill=T)
+}
+
+#mining damage type count for bulk 
+minedtcount<- as.numeric(DH_summary[19,12])
+cat("The total mining damage type count is", minedtcount,fill=T)
+
+#mining damage type count for each taxon 
+for (i in 1:(nrow(DH_summary)-1)) {
+  cat(paste0(DH_summary[i,1],", ",(DH_summary[i,12])),fill=T)
+}
+
+#galling damage type count for bulk
+galldtcount<- as.numeric(DH_summary[19,11])
+cat("The total galling damage type count is", galldtcount,fill=T)
+
+#galling damage type count for each taxon 
+for (i in 1:(nrow(DH_summary)-1)) {
+  cat(paste0(DH_summary[i,1],", ",(DH_summary[i,11])),fill=T)
+}
+```
+
+## 7. Percent Area Damaged (Intensity)
+
+Want total percent area damaged for bulk and each taxon, and percent area damaged for each FFG for bulk and each taxon. 
+```{r}
+#already have the number for the bulk
+#total percent area damaged for each taxon 
+taxa <- unique(data2$Plant.ID)
+total_damage <- c()
+for (t in taxa){
+  temp_taxa <- data2[which(data2$Plant.ID == t),]
+  temp_taxa <- temp_taxa[,c(4:9,11,12)] #include column 11 for oviposition, column 14 for fungal
+  sum <- sum(apply(temp_taxa[,-1],1,sum))
+  sum_perc <- sum/sum(temp_taxa$area_leaf)
+  total_damage <- c(total_damage,sum_perc)
+}
+total_damage_df <- data.frame(taxon=taxa,total_damage=total_damage)
+print("Doesn't include oviposition or fungal damage!")
+print(total_damage_df) #Doesn't include oviposition or fungal damage! Easily changed though
+
+ffg_breakdown <- as.data.frame(matrix(nrow=length(taxa),ncol=9,data=NA))
+colnames(ffg_breakdown) <- colnames(data2)[6:14]
+rownames(ffg_breakdown) <- taxa
+for (t in taxa){
+  temp_taxa <- data2[which(data2$Plant.ID == t),]
+  temp_taxa <- temp_taxa[,c(5:14)]
+  sum <- apply(temp_taxa[,-1],2,sum)
+  sum_perc <- sum/sum(temp_taxa$area_leaf)
+  ffg_breakdown[t,] <- sum_perc
+}
+print(ffg_breakdown)
+
+total_leaf_area <- sum(data2$area_leaf)
+ffg_totals <- apply(data2[,6:14],2,sum)
+ffg_total_perc <- ffg_totals/total_leaf_area
+ffg_total_df <- data.frame("FFG"=colnames(data2)[6:14],"bulk_percent_area" = ffg_total_perc)
+print(ffg_total_df)
+```
+
+## 8. Fungal Damage
+
+Want percent of damaged leaves with fungal damage, and percent of undamaged leaves with fungal damage. 
+```{r}
+
+#number of leaves with fungal damage
+fung_num <- length(grep("F",data2$Damage))
+fung_freq <- fung_num/nrow(data2)
+
+#number of leaves with insect damage
+bug_num <- length(grep("[1-9]+",data2$Damage)) #no damage is coded as 0
+bug_freq <- bug_num/nrow(data2)
+
+#number with fungal and insect damage
+both_num <- length(which(grep("F",data2$Damage) %in% grep("[1-9]+",data2$Damage)))
+both_freq <- both_num/nrow(data2)
+
+#fisher's exact test
+#rows are bug, no-bug
+#columns are fung, no-fung
+fung_nobug <- length(which(grep("F",data2$Damage) %in% grep("[1-9]+",data2$Damage) == FALSE))
+bug_nofung <- length(which(grep("[1-9]+",data2$Damage) %in% grep("F",data2$Damage) == FALSE))
+undam_num <- length(c(1:nrow(data2))[-c(grep("F",data2$Damage),grep("[1-9]+",data2$Damage))])
+contingency_mat <- matrix(data=c(both_num, bug_nofung, fung_nobug, undam_num),ncol=2,byrow = T)
+exact <- fisher.test(contingency_mat,simulate.p.value = TRUE)#great!! we reject the null (independent data)
+mosaicplot(contingency_mat,
+  main = "Mosaic plot",
+  color = TRUE
+)
+#alrighty so now we wanna see if there's anything with specialized damage 
+mask_fung<- read_csv("mask_fungal.csv")
+spec_key<-subset(mask_fung, Spec==TRUE )
+spec_key<- spec_key[,1]
+regex_statement<- paste0("[",paste(spec_key$DT,sep="",collapse=","),"]+")
+#now i have specialized damage key 
+spec_bug<- length(grep(regex_statement,data2$Damage))#this gives us everything with any number inside it, including 0s so this does not quite work- think there may be an issue with the regex statement to begin with 
+
+
+head(str_replace(data2$Damage, " \\s*\\([^d\\)]+\\)", ""))
+
+#sept note- this whole commented chunk is not valid, as it was done on the wrong dataframes and is giving average PAD by fungus, not counting instances
+#sept note this is no good with the 10 8 call 
+#percent of all leaves with fungal damage
+#percfungdam_tw<-DH_summary[10,8]
+#percfungdam_tw<- as.numeric(percfungdam_tw)*100
+#cat("The percent of leaves with fungal damage is", percfungdam_tw, "%")
+#how to do percent of leaves with fungal damage on all non-insect damaged leaves
+#DH_fungusonly_LMAtaxa<- read_csv("DH_fungusonly_LMAtaxa.csv")
+#perc_noninsectdam_fung<- (nrow(DH_fungusonly_LMAtaxa)/(nrow(undam)+nrow(DH_fungusonly_LMAtaxa)))*100
+#cat("The percent of non-insect damaged leaves with fungal damage is", perc_noninsectdam_fung, "%")
+
+#percent of damaged leaves with fungal damage 
+#DH_summary_dam <- read_csv("DH_summary_dam.csv") #this is the .csv from running t.w. code with just the damaged leaves
+#percfungdamtotalondam<-as.numeric(DH_summary_dam[10,8]*100)
+#cat("The percent of damaged leaves with fungal damage is", percfungdamtotalondam, "%")
+
+
+```
+
+## This gets rid of the () in the damage counts
+```{r}
+data2_no_par_in_dam <- str_remove_all(data2$Damage, "\\(\\d+\\)")
+
+```
+
+```{r}
+spl_data2_no_par_in_dam <- str_split(data2_no_par_in_dam, ", ", simplify = TRUE)
+
+data2_spec <- apply(spl_data2_no_par_in_dam, 2, function(x) x %in% spec_key$DT)
+
+rowSums(data2_spec)
+class(data2_spec)
+#where the row sums are greater than one, count that and make it the length of spec_bug_nofung
+spec_bug_nofung<-length(which(data2_spec))
+#now we need the count with that and Fs 
+class(spec_key)
+spec_key_f<-as.data.frame(spec_key)
+spec_key_f$DT<- as.character(spec_key_f$DT)
+spec_key_f[nrow(spec_key_f)+1,] <- "F"
+
+data2_spec_f <- apply(spl_data2_no_par_in_dam, 2, function(x) x %in% spec_key_f$DT)
+both_spec_num<-length(which(data2_spec_f))
+
+#making matrix with the spec bug
+contingency_mat_spec <- matrix(data=c(both_spec_num, spec_bug_nofung, fung_nobug, undam_num),ncol=2,byrow = T)
+exact_spec <- fisher.test(contingency_mat_spec,simulate.p.value = TRUE)
+#specialized damage more likely - 31 times more likely 
+
+#okay so now the request has come down for general damage 
+#need general number which 
+
+
+
+  
+```
+
+
+## 9. NMDS'ing
+```{r}
+library(tidyverse)
+library(vegan)
+library(NADA2)
+set.seed(100)
+nmds_data <- DH_summary[ ,c(6:14)]
+nmds_data <- nmds_data[-10,]
+rownames(nmds_data) <- DH_summary$Species[-10]
+nmds_results <- metaMDS(nmds_data,distance="bray",trace=F)
+plot(nmds_results)
+stressplot(nmds_results)
+nmds_results$stress
+
+scree <- as.data.frame(matrix(nrow=4,ncol=2))
+scree[,1] <- c(1:4)
+colnames(scree) <- c("dim","stress")
+for (i in 1:4){
+  scree[i,2] <- metaMDS(nmds_data,distance="bray",k=i,trace=F)$stress
+}
+plot(scree$stress~scree$dim)
+
+nmds_results3 <- metaMDS(nmds_data,distance = "bray",k=3,trace=F)
+library(plotly)
+plot_ly(data = data.frame(scores(nmds_results3)), x = ~NMDS1, y = ~NMDS2, z = ~NMDS3) %>% add_text(text = rownames(nmds_data)) %>% add_markers(color = (nmds_data$`%Fungal`)) %>% colorbar(title = "Fungal Damage")
+
+
+nmdsscores <- as.data.frame(scores(nmds_results))
+ggplot(nmdsscores,aes(NMDS1,NMDS2))+
+geom_point()+ geom_text(label=rownames(nmds_data), nudge_x = 0.015, nudge_y =  0.015,) + theme_bw()
+
+#now do it for individual leaves with DT presence/absence data
+
+indv_data <- read.csv("./DH_ffg_presence.csv")
+input <- read.table("./DH_all_MPC.txt",sep="\t",header=T)
+indv_data_spp <- input$Plant.ID
+
+indv_data_dist <- binaryDiss(indv_data)
+bin_mds <- metaMDS(indv_data_dist, zerodist = "add", autotransform = FALSE,trace=F)
+bin_mds$stress
+stressplot(bin_mds)
+
+scree_bin <- as.data.frame(matrix(nrow=8,ncol=2))
+scree_bin[,1] <- c(1:8)
+colnames(scree_bin) <- c("dim","stress")
+for (i in 1:8){
+  scree_bin[i,2] <- metaMDS(indv_data_dist,zerodist="add",k=i,trace=F)$stress
+}
+plot(scree_bin$stress~scree_bin$dim)
+
+
+bin_nmdsscores <- as.data.frame(scores(bin_mds))
+bin_nmdsscores$spp <- indv_data_spp
+ggplot(bin_nmdsscores,aes(x=NMDS1,y=NMDS2,color=spp))+
+geom_point()+ theme_minimal()
+
+bin_nmds_results3 <- metaMDS(indv_data_dist,zerodist = "add",k=3,trace=F)
+library(plotly)
+plot_ly(data = data.frame(scores(bin_nmds_results3)), x = ~NMDS1, y = ~NMDS2, z = ~NMDS3) %>% add_markers(color = (bin_nmdsscores$spp))
+
+########
+#this part is individual leaves, with area damaged per ffg
+#make a df where each row is a leaf and each column is a ffg that i have area measured for 
+indv_nmds <- bind_rows(data,fungdata)
+leaf_area <- indv_nmds$area_leaf
+indv_nmds_names <- indv_nmds$Specimen.number
+indv_nmds <- indv_nmds %>% replace(is.na(.), 0)
+for (f in 1:nrow(indv_nmds)){
+  if (indv_nmds$fungal_dam[f] == 0 & indv_nmds$fungal_dam_area[f] != 0){
+    indv_nmds$fungal_dam[f] <- indv_nmds$fungal_dam_area[f]
+  }
+}
+
+indv_nmds <- indv_nmds[,c(6:14)]
+
+#turn areas into proportions!
+for (r in 1:nrow(indv_nmds)){
+  indv_nmds[r,] <- indv_nmds[r,]/leaf_area[r]
+}
+damage_sum <- apply(indv_nmds,1,sum)
+length(which(damage_sum==0))
+hist(damage_sum,labels=T)
+
+indv_nmds_names <- indv_nmds_names[-which(apply(indv_nmds,1,sum)==0)]
+indv_nmds <- indv_nmds[-which(apply(indv_nmds,1,sum)==0),]
+test <- metaMDS(indv_nmds,distance="bray",k=2,maxit=100,trymax=100)
+stressplot(test)
+plot(test)
+test$stress
+
+scree_indv <- as.data.frame(matrix(nrow=8,ncol=2))
+scree_indv[,1] <- c(1:8)
+colnames(scree_indv) <- c("dim","stress")
+for (i in 1:8){
+  scree_indv[i,2] <- metaMDS(nmds_data,distance="bray",k=i,trace=F)$stress
+}
+plot(scree_indv$stress~scree_indv$dim)
+
+#nmds3_indv <- metaMDS(indv_nmds,distance = "bray",k=3, maxit=200,trymax=200)
+
+#nmds without fungal damage
+indv_nofung <- indv_nmds[,-9]
+indv_nofung_names <- indv_nmds_names[-which(apply(indv_nofung,1,sum) == 0)]
+indv_nofung <- indv_nofung[-which(apply(indv_nofung,1,sum) == 0),]
+nmds_nofung <- metaMDS(indv_nofung,distance="bray",k=3,maxit=100,trymax=100,trace=F) #does not converge!
+
+nofung_nmds_fung <- indv_nmds$fungal_dam[match(indv_nofung_names,indv_nmds_names)]
+#no convergence
+nmds_nofung$stress
+stressplot(nmds_nofung)
+
+scree_nofung <- as.data.frame(matrix(nrow=8,ncol=2))
+scree_nofung[,1] <- c(1:8)
+colnames(scree_nofung) <- c("dim","stress")
+for (i in 1:8){
+  scree_nofung[i,2] <- metaMDS(indv_nofung,distance="bray",k=i,trace=F)$stress
+}
+plot(scree_nofung$stress~scree_nofung$dim) #lots of dimensions! 
+print("What follows is the 3d plot without fungal damage and color coded the points with fungal damage gradient")
+plot_ly(data = data.frame(scores(nmds_nofung)), x = ~NMDS1, y = ~NMDS2, z = ~NMDS3) %>% add_markers(color = (nofung_nmds_fung))
+#looks bad -- do not include in talk
+#model doesn't converge? 
+
+```
+
+## 10. Plots of LMA vs XYZ herbivory metrics
+
+```{r}
+
+#make df with lma and damage freq data
+sum_freq_lma <- DH_summary
+sum_freq_lma$lma <- data$LMA[match(sum_freq_lma$Species,data$Plant.ID)]
+sum_freq_lma <- sum_freq_lma[-nrow(sum_freq_lma),]
+colnames(sum_freq_lma) <- gsub("%","perc_",colnames(sum_freq_lma),fixed = T)
+sum_freq_lma$Species <-gsub("DH18", "Populus sp", sum_freq_lma$Species)
+sum_freq_lma$Species <-gsub("DH01", "Macginitiea (toothed)", sum_freq_lma$Species)
+sum_freq_lma$Species <-gsub("DH02", "Macginitiea (untoothed)", sum_freq_lma$Species)
+sum_freq_lma$Species <-gsub("DH05", "Platanites", sum_freq_lma$Species)
+
+DMGplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Insect,x=lma,color=Species)) + geom_point() + theme_minimal()
+hole_plot <- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Hole,x=lma,color=Species)) + geom_point() + theme_minimal()
+gallplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Gall,x=lma,color=Species)) + geom_point() + theme_minimal()
+mineplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Mine,x=lma,color=Species)) + geom_point() + theme_minimal()
+fungalplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Fungal,x=lma,color=Species)) + geom_point() + theme_minimal()
+skeletonplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Skeleton,x=lma,color=Species)) + geom_point() + theme_minimal()
+marginplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Margin,x=lma,color=Species)) + geom_point() + theme_minimal()
+surfacedamplot<- ggplot(data=sum_freq_lma,mapping=aes(y=perc_Surface,x=lma,color=Species)) + geom_point() + theme_minimal()
+dtsplot<- ggplot(data=sum_freq_lma,mapping=aes(y=DTs,x=lma,color=Species)) + geom_point() + theme_minimal()
+specdtsplot<- ggplot(data=sum_freq_lma,mapping=aes(y=SpecDTs,x=lma,color=Species)) + geom_point() + theme_minimal()
+
+require("gridExtra")
+#grid.arrange(DMGplot, hole_plot, gallplot, mineplot, fungalplot, skeletonplot, marginplot, surfacedamplot, dtsplot, specdtsplot, ncol = 2, nrow = 5)
+require("ggpubr")
+ggarrange(DMGplot, dtsplot, specdtsplot, common.legend = TRUE, legend = "right", ncol=2, nrow=2)
+ggarrange(gallplot, mineplot, fungalplot, skeletonplot, common.legend = TRUE, legend = "bottom", ncol=3, nrow=3)
+ggarrange(hole_plot, marginplot, surfacedamplot, common.legend = TRUE, legend = "bottom", ncol=2, nrow=2)
+
+
+```
+
+
+## 11. Plots of LMA vs XYZ herbivory metrics using rarified values
+
+This code chunk has the same plots as above using rarified values with a cutoff of n=20 leaves for the sampling. 
+```{r}
+#may 04 2022 AM
+#loading in all these files from modifiying torstens code to give them to me. shouldve changed the spacing that gets loaded in....
+library(readr)
+#first DH02 
+DH_DH02_All_ <- read_csv("DH _ DH02 _All .csv")
+DH_DH02_FFG_ <- read_csv("DH _ DH02 _FFG .csv")
+DH_DH02_Insect_ <- read_csv("DH _ DH02 _Insect .csv")
+DH_DH02_Spec_ <- read_csv("DH _ DH02 _Spec .csv")
+#now for DH03
+DH_DH03_All_ <- read_csv("DH _ DH03 _All .csv")
+DH_DH03_FFG_ <- read_csv("DH _ DH03 _FFG .csv")
+DH_DH03_Gall_ <- read_csv("DH _ DH03 _Gall .csv")
+DH_DH03_Insect_ <- read_csv("DH _ DH03 _Insect .csv")
+DH_DH03_Spec_ <- read_csv("DH _ DH03 _Spec .csv")
+#now for DH08
+DH_DH08_All_ <- read_csv("DH _ DH08 _All .csv")
+DH_DH08_FFG_ <- read_csv("DH _ DH08 _FFG .csv")
+DH_DH08_Gall_ <- read_csv("DH _ DH08 _Gall .csv")
+DH_DH08_Insect_ <- read_csv("DH _ DH08 _Insect .csv")
+DH_DH08_Mine_ <- read_csv("DH _ DH08 _Mine .csv")
+DH_DH08_Spec_ <- read_csv("DH _ DH08 _Spec .csv")
+#now for DH12
+DH_DH12_All_ <- read_csv("DH _ DH12 _All .csv")
+DH_DH12_FFG_ <- read_csv("DH _ DH12 _FFG .csv")
+DH_DH12_Gall_ <- read_csv("DH _ DH12 _Gall .csv")
+DH_DH12_Insect_ <- read_csv("DH _ DH12 _Insect .csv")
+DH_DH12_Spec_ <- read_csv("DH _ DH12 _Spec .csv")
+#now for DH18
+DH_DH18_All_ <- read_csv("DH _ DH18 _All .csv")
+DH_DH18_FFG_ <- read_csv("DH _ DH18 _FFG .csv")
+DH_DH18_Gall_ <- read_csv("DH _ DH18 _Gall .csv")
+DH_DH18_Insect_ <- read_csv("DH _ DH18 _Insect .csv")
+DH_DH18_Mine_ <- read_csv("DH _ DH18 _Mine .csv")
+DH_DH18_Spec_ <- read_csv("DH _ DH18 _Spec .csv")
+
+zerodf<- data.frame(matrix(0, nrow = 20, ncol = 3))
+#now I have all these dataframes. make a big 'um for the 20 leaf cutoff
+#make list of dataframes for each sp
+DH02_list <- list(DH_DH02_All_,DH_DH02_FFG_,DH_DH02_Insect_,DH_DH02_Spec_)
+names(DH02_list) <- c("All","FFG","Insect","Spec")
+DH03_list <- list(DH_DH03_All_,DH_DH03_FFG_,DH_DH03_Insect_,DH_DH03_Spec_,DH_DH03_Gall_)
+names(DH03_list) <- c("All","FFG","Insect","Spec","Gall")
+DH08_list <- list(DH_DH08_All_,DH_DH08_FFG_,DH_DH08_Insect_,DH_DH08_Spec_,DH_DH08_Gall_,DH_DH08_Mine_)
+names(DH08_list) <- c("All","FFG","Insect","Spec","Gall","Mine")
+DH12_list <- list(DH_DH12_All_,DH_DH12_FFG_,DH_DH12_Insect_,DH_DH12_Spec_,DH_DH12_Gall_)
+names(DH12_list) <- c("All","FFG","Insect","Spec","Gall")
+DH18_list <- list(DH_DH18_All_,DH_DH18_FFG_,DH_DH18_Insect_,DH_DH18_Spec_,DH_DH18_Gall_,DH_DH18_Mine_)
+names(DH18_list) <- c("All","FFG","Insect","Spec","Gall","Mine")
+
+list_species<- c("DH02", "DH03", "DH08", "DH12", "DH18")
+list_all <- c((as.numeric(DH02_list[["All"]][20,1])),
+              (as.numeric(DH03_list[["All"]][20,1])),
+              (as.numeric(DH08_list[["All"]][20,1])),
+              (as.numeric(DH12_list[["All"]][20,1])),
+              (as.numeric(DH18_list[["All"]][20,1]))
+)
+list_insect <- c((as.numeric(DH02_list[["Insect"]][20,1])),
+              (as.numeric(DH03_list[["Insect"]][20,1])),
+              (as.numeric(DH08_list[["Insect"]][20,1])),
+              (as.numeric(DH12_list[["Insect"]][20,1])),
+              (as.numeric(DH18_list[["Insect"]][20,1]))
+)
+list_FFG<- c((as.numeric(DH02_list[["FFG"]][20,1])),
+              (as.numeric(DH03_list[["FFG"]][20,1])),
+              (as.numeric(DH08_list[["FFG"]][20,1])),
+              (as.numeric(DH12_list[["FFG"]][20,1])),
+              (as.numeric(DH18_list[["FFG"]][20,1]))
+)
+list_spec<- c((as.numeric(DH02_list[["Spec"]][20,1])),
+              (as.numeric(DH03_list[["Spec"]][20,1])),
+              (as.numeric(DH08_list[["Spec"]][20,1])),
+              (as.numeric(DH12_list[["Spec"]][20,1])),
+              (as.numeric(DH18_list[["Spec"]][20,1]))
+)
+list_gall<- c((as.numeric(zerodf[20,1])),
+              (as.numeric(DH03_list[["Gall"]][20,1])),
+              (as.numeric(DH08_list[["Gall"]][20,1])),
+              (as.numeric(DH12_list[["Gall"]][20,1])),
+              (as.numeric(DH18_list[["Gall"]][20,1]))
+)
+list_mine<- c((as.numeric(zerodf[20,1])),
+              (as.numeric(zerodf[20,1])),
+              (as.numeric(DH08_list[["Mine"]][20,1])),
+              (as.numeric(zerodf[20,1])),
+              (as.numeric(DH18_list[["Mine"]][20,1]))
+)
+lma_for_rare<- c(69.57,71.49,94.16,77.44,76.04)
+raref_dam_data<- data.frame(list_species, list_all, list_insect, list_FFG, list_spec, list_gall, list_mine, lma_for_rare) 
+
+class(raref_dam_data)
+raref_dam_data[1,1]<- ("Macginitiea Untoothed")
+raref_dam_data[5,1]<- ("Populus sp")
+
+list_all_sd <- c((as.numeric(DH02_list[["All"]][20,3])),
+              (as.numeric(DH03_list[["All"]][20,3])),
+              (as.numeric(DH08_list[["All"]][20,3])),
+              (as.numeric(DH12_list[["All"]][20,3])),
+              (as.numeric(DH18_list[["All"]][20,3]))
+)
+list_insect_sd <- c((as.numeric(DH02_list[["Insect"]][20,3])),
+              (as.numeric(DH03_list[["Insect"]][20,3])),
+              (as.numeric(DH08_list[["Insect"]][20,3])),
+              (as.numeric(DH12_list[["Insect"]][20,3])),
+              (as.numeric(DH18_list[["Insect"]][20,3]))
+)
+list_FFG_sd <- c((as.numeric(DH02_list[["FFG"]][20,3])),
+              (as.numeric(DH03_list[["FFG"]][20,3])),
+              (as.numeric(DH08_list[["FFG"]][20,3])),
+              (as.numeric(DH12_list[["FFG"]][20,3])),
+              (as.numeric(DH18_list[["FFG"]][20,3]))
+)
+list_spec_sd <- c((as.numeric(DH02_list[["Spec"]][20,3])),
+              (as.numeric(DH03_list[["Spec"]][20,3])),
+              (as.numeric(DH08_list[["Spec"]][20,3])),
+              (as.numeric(DH12_list[["Spec"]][20,3])),
+              (as.numeric(DH18_list[["Spec"]][20,3]))
+)
+list_gall_sd <- c((as.numeric(zerodf[20,3])),
+              (as.numeric(DH03_list[["Gall"]][20,3])),
+              (as.numeric(DH08_list[["Gall"]][20,3])),
+              (as.numeric(DH12_list[["Gall"]][20,3])),
+              (as.numeric(DH18_list[["Gall"]][20,3]))
+)
+list_mine_sd <- c((as.numeric(zerodf[20,3])),
+              (as.numeric(zerodf[20,3])),
+              (as.numeric(DH08_list[["Mine"]][20,3])),
+              (as.numeric(zerodf[20,3])),
+              (as.numeric(DH18_list[["Mine"]][20,3]))
+)
+
+lma_for_rare <- c(69.57,71.49,94.16,77.44,76.04)
+lma_for_rare_sd<- c(30.99, 16.46, 17.58, 25.76,21.32)
+lvd_for_rare<- c(4.828, 7.599, 8.301, 5.711, 5.489 )
+lvd_for_rare_sd<- c(.697, 1.580, 1.152, 2.032, .912)
+raref_dam_data_sd<- data.frame(list_species, list_all_sd, list_insect_sd, list_FFG_sd, list_spec_sd, list_gall_sd, list_mine_sd, lma_for_rare, lma_for_rare_sd,lvd_for_rare, lvd_for_rare_sd) 
+raref_dam_data<- data.frame(list_species, list_all, list_insect, list_FFG, list_spec, list_gall, list_mine, lma_for_rare, lvd_for_rare) 
+
+class(raref_dam_data_sd)
+raref_dam_data_sd[1,1]<- ("Macginitiea Untoothed")
+raref_dam_data_sd[5,1]<- ("Populus sp")
+
+View(raref_dam_data)
+
+#making the standard deviations for my plots, have to put it in the original object so ggplot will actually pay attn
+raref_dam_data$list_all_min <- raref_dam_data$list_all - raref_dam_data_sd$list_all_sd
+raref_dam_data$list_all_max <- raref_dam_data$list_all + raref_dam_data_sd$list_all_sd
+raref_dam_data$list_insect_min <- raref_dam_data$list_insect - raref_dam_data_sd$list_insect_sd
+raref_dam_data$list_insect_max <- raref_dam_data$list_insect + raref_dam_data_sd$list_insect_sd
+raref_dam_data$list_FFG_min <- raref_dam_data$list_FFG - raref_dam_data_sd$list_FFG_sd
+raref_dam_data$list_FFG_max <- raref_dam_data$list_FFG + raref_dam_data_sd$list_FFG_sd
+raref_dam_data$list_spec_min <- raref_dam_data$list_spec - raref_dam_data_sd$list_spec_sd
+raref_dam_data$list_spec_max <- raref_dam_data$list_spec + raref_dam_data_sd$list_spec_sd
+raref_dam_data$list_gall_min <- raref_dam_data$list_gall - raref_dam_data_sd$list_gall_sd
+raref_dam_data$list_gall_max <- raref_dam_data$list_gall + raref_dam_data_sd$list_gall_sd
+raref_dam_data$list_mine_min <- raref_dam_data$list_mine - raref_dam_data_sd$list_mine_sd
+raref_dam_data$list_mine_max <- raref_dam_data$list_mine + raref_dam_data_sd$list_mine_sd
+
+#now the sd for the lma
+raref_dam_data$lma_min<-raref_dam_data$lma_for_rare - raref_dam_data_sd$lma_for_rare_sd
+raref_dam_data$lma_max<- raref_dam_data$lma_for_rare + raref_dam_data_sd$lma_for_rare_sd
+
+#Now I can plot this data 
+#plot for insect damage types vs lma
+ggplot(data=raref_dam_data,mapping=aes(y=list_insect,x=lma_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(ymin=list_insect - raref_dam_data_sd$list_insect_sd, ymax = list_insect + raref_dam_data_sd$list_insect_sd) +
+  geom_errorbarh(aes(xmin = lma_min,xmax =lma_max))+
+  theme_minimal()+
+  xlab("LMA in g/m^2")+ylab("Number of rarefied insect damage types, n=20")+labs(color="Species") 
+
+#plot for ffg vs lma
+ggplot(data=raref_dam_data,mapping=aes(y=list_FFG,x=lma_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(ymin=list_FFG - raref_dam_data_sd$list_FFG_sd, ymax=list_FFG + raref_dam_data_sd$list_FFG_sd) + 
+  geom_errorbarh(aes(xmin = lma_min,xmax =lma_max))+
+  theme_minimal()+
+  xlab("LMA in g/m^2")+ylab("Number of rarefied functional feeding groups, n=20")+labs(color="Species")
+
+#plot for spec dts vs lma
+ggplot(data=raref_dam_data,mapping=aes(y=list_spec,x=lma_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(ymin=list_spec - raref_dam_data_sd$list_spec_sd, ymax= list_spec + raref_dam_data_sd$list_spec_sd) + 
+  geom_errorbarh(aes(xmin = lma_min,xmax =lma_max))+
+  theme_minimal()+
+  xlab("LMA in g/m^2")+ylab("Number of rarefied specallized insect damage types, n=20")+labs(color="Species")
+
+#plot for gall dts vs lma
+ggplot(data=raref_dam_data,mapping=aes(y=list_gall,x=lma_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(ymin=list_gall - raref_dam_data_sd$list_gall_sd, ymax = list_gall + raref_dam_data_sd$list_gall_sd)+ 
+  geom_errorbarh(aes(xmin = lma_min,xmax =lma_max))+
+  theme_minimal()+
+  xlab("LMA in g/m^2")+ylab("Number of rarefied galling insect damage types, n=20")+labs(color="Species")
+
+#plot for mine dts vs lma 
+ggplot(data=raref_dam_data,mapping=aes(y=list_mine,x=lma_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(ymin=list_mine - raref_dam_data_sd$list_mine_sd, ymax = list_mine + raref_dam_data_sd$list_mine_sd)+
+  geom_errorbarh(aes(xmin = lma_min,xmax =lma_max))+
+  theme_minimal()+
+  xlab("LMA in g/m^2")+ylab("Number of rarefied mining insect damage types, n=20")+labs(color="Species")
+
+###############
+#alrighty lets do that same thing but this time with the lvd
+raref_dam_data$lvd_min<-raref_dam_data$lvd_for_rare - raref_dam_data_sd$lvd_for_rare_sd
+raref_dam_data$lvd_max<- raref_dam_data$lvd_for_rare + raref_dam_data_sd$lvd_for_rare_sd
+View(raref_dam_data)
+
+#Now I can plot this data for the LVD 
+#plot for insect damage types vs lvd
+#I CAN DRAW A LINE
+ggplot(data=raref_dam_data,mapping=aes(y=list_insect,x=lvd_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(aes(ymin=list_insect_min, ymax = list_insect_max)) + 
+  geom_errorbarh(aes(xmin = lvd_min,xmax =lvd_max))+
+  theme_minimal()+
+  xlab("mean LVD in mm/mm^2")+ylab("Number of rarefied insect damage types, n=20")+labs(color="Species") 
+
+#plot for ffg vs lvd
+#I CAN DRAW A LINE
+ggplot(data=raref_dam_data,mapping=aes(y=list_FFG,x=lvd_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(aes(ymin=list_FFG_min, ymax = list_FFG_max)) + 
+  geom_errorbarh(aes(xmin = lvd_min,xmax =lvd_max))+
+  theme_minimal()+
+  xlab("mean LVD in mm/mm^2")+ylab("Number of rarefied functional feeding groups, n=20")+labs(color="Species")
+
+#plot for spec dts vs lvd
+#I CAN DRAW A LINE
+ggplot(data=raref_dam_data,mapping=aes(y=list_spec,x=lvd_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(aes(ymin=list_spec_min, ymax = list_spec_max)) + 
+  geom_errorbarh(aes(xmin = lvd_min,xmax =lvd_max))+
+  theme_minimal()+
+  xlab("mean LVD in mm/mm^2")+ylab("Number of rarefied specallized insect damage types, n=20")+labs(color="Species")
+
+#plot for gall dts vs lvd
+#I CAN DARW LINE
+ggplot(data=raref_dam_data,mapping=aes(y=list_gall,x=lvd_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(aes(ymin=list_gall_min, ymax = list_gall_max)) + 
+  geom_errorbarh(aes(xmin = lvd_min,xmax =lvd_max))+
+  theme_minimal()+
+  xlab("mean LVD in mm/mm^2")+ylab("Number of rarefied galling insect damage types, n=20")+labs(color="Species")
+
+#plot for mine dts vs lvd 
+ggplot(data=raref_dam_data,mapping=aes(y=list_mine,x=lvd_for_rare,color=list_species, label=list_species)) + 
+  geom_pointrange(aes(ymin=list_mine_min, ymax = list_mine_max)) + 
+  geom_errorbarh(aes(xmin = lvd_min,xmax =lvd_max))+
+  theme_minimal()+
+  xlab("mean LVD in mm/mm^2")+ylab("Number of rarefied mining insect damage types, n=20")+labs(color="Species")
+
+
+#number of leaves per morphotype
+DH_summary_4plot<- DH_summary
+#DH_summary_4plot[3,1] <- "Populus sp"
+#DH_summary_4plot[5,1] <- "Platanites"
+#DH_summary_4plot[6,1] <- "Macginitiea\nUntoothed"
+#DH_summary_4plot[7,1] <- "Macginities\nToothed"
+
+barplot(DH_summary_4plot[1:9,2], xlab="Morphotypes")
+colnames(DH_summary_4plot)[2] <- "num_leaves"
+ggplot(DH_summary_4plot[-19,],mapping=aes(y=num_leaves,x=Species,fill=Species,color=Species)) + geom_col() + theme_minimal() + guides(fill="none",color="none")+ylab("number of leaves")+xlab("morphotype")
+
+### 
+#models here for hte ones where I can draw a line
+#rarefied numbers are no longer counts- if they were counts aka qwhole then poission of neg binomial
+#because theyre not, we can do a normal glm - has better output 
+
+glm1<-glm(list_insect~lvd_for_rare, data=raref_dam_data)
+summary(glm1) #low data because of the huge standard error
+
+glm2<-glm(list_FFG~lvd_for_rare, data=raref_dam_data)
+summary(glm2)
+
+glm3<-glm(list_spec~lvd_for_rare, data=raref_dam_data)
+summary(glm3)
+
+glm4<-glm(list_insect~lvd_for_rare, data=raref_dam_data)
+summary(glm4)
+
+glm5<-glm(list_gall~lvd_for_rare, data=raref_dam_data)
+summary(glm5)
+
+
+
+#observe relationships- maybve they can be biologically meanigful if not quite statistically 
+#getting positive relationships, dopnt have too much data- using means, lose uncertainty
+#if we model on individual, we might have a larger sample size- for leaves with LVD, can I do a number of damage types observed on that leaf, number of specialized damages on the leaf- do it at the scale I measured the LVD- dont need to rarefy, number of DTs as a function of LVD + random effect for plant id (would be poisson or negative binomial- maybe negative binomial- glmer)
+```
+
+```{r}
+#more of the models, except do the means of the data (mean LVD for taxa, mean LMA for taxa, mean etc) OCT NOTE
+#this goes here because of the fact that we need torstens code 
+#need to make an object with the means of the lvd 
+#make means for lma object as well 
+library(dplyr)
+
+mean_lvds<- data_no_area_LVD_zeroes %>%
+  group_by(Plant.ID) %>%
+  summarise_at(vars(LVD), list(name = mean))
+mean_lmas<- data_no_area_LVD_zeroes %>%
+  group_by(Plant.ID) %>%
+  summarise_at(vars(LMA), list(name = mean))
+means_PAD<- data_no_area_LVD_zeroes %>%
+  group_by(Plant.ID) %>%
+  summarise_at(vars(perc_area_dam), list(name = mean))
+means_PAD_f<- data_no_area_LVD_zeroes %>%
+  group_by(Plant.ID) %>%
+  summarise_at(vars(perc_fung_dam), list(name = mean))
+class(mean_lvds)
+means_dataframe<- data.frame(mean_lvds, mean_lmas, means_PAD, means_PAD_f)
+View(means_dataframe)
+
+means_dataframe<- subset(means_dataframe, select = -c(Plant.ID.1,Plant.ID.2, Plant.ID.3))
+View(means_dataframe)
+means_dataframe$mean_lvd<- means_dataframe$name
+means_dataframe$mean_lma<- means_dataframe$name.1
+means_dataframe$mean_PAD<- means_dataframe$name.2
+means_dataframe$mean_PAD_f<- means_dataframe$name.3
+means_dataframe<- subset(means_dataframe, select = -c(name,name.1,name.2, name.3))
+#my raref dam data is okay to use
+#now we need to test the glm model assumptions
+
+ggplot(data=means_dataframe,mapping=aes(y=mean_lvd,x=mean_PAD,color=Plant.ID, label=Plant.ID)) + 
+  geom_point()
+ggplot(data=means_dataframe,mapping=aes(y=mean_lma,x=mean_PAD,color=Plant.ID, label=Plant.ID)) + 
+  geom_point()
+ggplot(data=means_dataframe,mapping=aes(y=mean_lvd,x=mean_PAD_f,color=Plant.ID, label=Plant.ID)) + 
+  geom_point()
+ggplot(data=means_dataframe,mapping=aes(y=mean_lma,x=mean_PAD_f,color=Plant.ID, label=Plant.ID)) + 
+  geom_point()#this looks like a linear relationship!
+
+#################
+means_dataframe$mean_lma[which(means_dataframe$mean_lma == 0)] <- NA
+
+```
+
+
+## Code for the neg binom for LVD on indvidual and number of DTS
+```{r}
+#if we model on individual, we might have a larger sample size- for leaves with LVD, can I do a number of damage types observed on that leaf, number of specialized damages on the leaf- do it at the scale I measured the LVD- dont need to rarefy, number of DTs as a function of LVD + random effect for plant id (would be poisson or negative binomial- maybe negative binomial- glmer)
+#dont have something cleaned in the way we need it but we can do all damage types 
+library(stringr)
+data_no_LVD_zeroes$dt_count<- data_no_LVD_zeroes$Damage
+data_no_LVD_zeroes$dt_count[which(is.na(data_no_LVD_zeroes$dt_count) | data_no_LVD_zeroes$dt_count == "")] <- 0
+nonzero_indices <- which(data_no_LVD_zeroes$dt_count != 0)
+data_no_LVD_zeroes$dt_count[nonzero_indices] <- str_count(data_no_LVD_zeroes$dt_count[nonzero_indices],",")+1
+data_no_LVD_zeroes$dt_count<- as.numeric(data_no_LVD_zeroes$dt_count)
+#now run models
+glmer1 <- glmer.nb(dt_count ~ LVD + (1|Plant.ID), data=data_no_LVD_zeroes)
+summary(glmer1)
+install.packages("MuMIn")
+library(MuMIn)
+r.squaredGLMM(glmer1)
+install.packages("modelsummary")
+library(modelsummary)
+```
+Plot the relationship from the model above
+```{r}
+
+unique(data_no_LVD_zeroes$Plant.ID)#only 12 here species wise
+LVD_vs_dt_count_plot<-ggplot(data=data_no_LVD_zeroes,mapping=aes(x=LVD,y=dt_count)) + geom_point(aes(color=Plant.ID),size=3,alpha=0.95) + ylab("Number of damage types") + xlab("LVD mm/mm^2") + geom_smooth(method="glm")+ labs(color='Species')+
+scale_color_manual(values = c("Macginitiea rannii" = "#e6194B", "Macginitiea gracilis" = "#3cb44b","Apeiba improvisa"="#ffe119",
+                             "Dombeya novi-mundi"= "#4363d8", "Platanites raynoldsii"= "#f58231", "Symplocos incondita"= "#911eb4",
+                             "Dicot sp.WR007"= "#42d4f4", "Rhus sp."= "#f032e6", "Dicot sp.WR027"= "#bfef45", "Dicot sp.WR028"= "#fabed4",
+                             "Dicot sp.WR029"= "#469990", "Dicot sp.WR030"= "#dcbeff", "Dicot sp.WR031"= "#9A6324", 
+                             "Populus cinnamomoides"="#fffac8", "Dicot sp.WR032"= "#800000", "Dicot sp.WR033"= "#aaffc3",
+                             "Dicot sp.WR034"= "#808000", "Juglandaceae sp.WR035"= "#ffd8b1"))
+
+
+png("LVD_vs_dt_count_plot.png", height=5.5, width=8, units="in", res=600) #this fits in line with my page!
+LVD_vs_dt_count_plot     # Plot 1 --> in the first page 
+dev.off()
+
+```
+
+
+
+
+Let's do the same model as above but for #DTs!
+```{r}
+data_no_PAD_zeroes$dt_count<- data_no_PAD_zeroes$Damage
+data_no_PAD_zeroes$dt_count[which(is.na(data_no_PAD_zeroes$dt_count) | data_no_PAD_zeroes$dt_count == "")] <- 0
+nonzero_indices <- which(data_no_PAD_zeroes$dt_count != 0)
+data_no_PAD_zeroes$dt_count[nonzero_indices] <- str_count(data_no_PAD_zeroes$dt_count[nonzero_indices],",")+1
+data_no_PAD_zeroes$dt_count<- as.numeric(data_no_PAD_zeroes$dt_count)
+data_no_PAD_zeroes$perc_area_dam[which(data_no_PAD_zeroes$perc_area_dam > 0 & data_no_PAD_zeroes$dt_count == 0)] <- 0
+#now run models
+modelx <- gamlss((perc_area_dam/100)~dt_count+random(as.factor(Plant.ID)),  family = BEZI, data=data_no_PAD_zeroes, trace = F)
+summary(modelx) #this says the more DTs (dt diversity) the more PAD
+```
+Plot relationship from above
+```{r}
+library(ggplot2)
+dev.off()
+unique(data_no_PAD_zeroes$Plant.ID)#there are 16 here, use the fullcolor pallette copy paste for time
+PAD_vs_dt_count_plot<-ggplot(data=data_no_PAD_zeroes,mapping=aes(x=dt_count,y=perc_area_dam)) + geom_point(aes(color=Plant.ID),size=3,alpha=0.95) +
+   ylab("PAD") + xlab("Number of damage types") + geom_smooth(method="glm")+ labs(color='Species')+
+scale_color_manual(values = c("Macginitiea rannii" = "#e6194B", "Macginitiea gracilis" = "#3cb44b","Apeiba improvisa"="#ffe119",
+                             "Dombeya novi-mundi"= "#4363d8", "Platanites raynoldsii"= "#f58231", "Symplocos incondita"= "#911eb4",
+                             "Dicot sp.WR007"= "#42d4f4", "Rhus sp."= "#f032e6", "Dicot sp.WR027"= "#bfef45", "Dicot sp.WR028"= "#fabed4",
+                             "Dicot sp.WR029"= "#469990", "Dicot sp.WR030"= "#dcbeff", "Dicot sp.WR031"= "#9A6324", 
+                             "Populus cinnamomoides"="#fffac8", "Dicot sp.WR032"= "#800000", "Dicot sp.WR033"= "#aaffc3",
+                             "Dicot sp.WR034"= "#808000", "Juglandaceae sp.WR035"= "#ffd8b1"))
+
+
+png("PAD_vs_dt_count_plot.png", height=5.5, width=8, units="in", res=600) #this fits in line with my page!
+PAD_vs_dt_count_plot     # Plot 1 --> in the first page 
+dev.off()
+
+```
+```{r}
+#lets make sure we have all of our tests on the species level as well
+#have to use rarfied n>20 values, so we are down to 7 taxa (need to have LMA and LVD values too)
+#so this probably wont hold water but lets try
+
+DH_spec_lvl_raref <- read_csv("DH_spec_lvl_raref.csv")
+DH_spec_lvl_raref
+
+library(gamlss)
+spec_lvl_raref_mod1<- lm(DT_count~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod1)
+
+spec_lvl_raref_mod2<- lm(FFG_count~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod2)
+
+spec_lvl_raref_mod3<- lm(Spec_count~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod3)
+
+spec_lvl_raref_mod4<- lm(Dam_freq~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod4)
+
+spec_lvl_raref_mod5<- lm(Total_PAD~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod5)
+
+spec_lvl_raref_mod6<- lm(Total_PAD~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod6)
+
+spec_lvl_raref_mod7<- lm(Dam_freq~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod7)
+
+spec_lvl_raref_mod8<- lm(Spec_count~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod8)
+
+spec_lvl_raref_mod9<- lm(FFG_count~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod9)
+
+spec_lvl_raref_mod10<- lm(DT_count~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod10)
+
+spec_lvl_raref_mod11<- lm(Fung_freq~LMA, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod11)
+
+spec_lvl_raref_mod12<- lm(Fung_freq~LVD, data=DH_spec_lvl_raref)
+summary(spec_lvl_raref_mod12)
+```
+
